@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# more than python3.6
 import re
 import paramiko
 import sys
@@ -7,6 +9,7 @@ import time
 from pyecharts import Line, Grid
 import csv
 import os
+import pandas as pd
 
 def wait_end(chan, mode="oper"):
     result = ""
@@ -22,20 +25,101 @@ def wait_end(chan, mode="oper"):
         if re.findall(reg, result[-15:]):
             break
         else:
+            if re.findall("Password:", result[-15:]):
+                chan.send("\n")
             time.sleep(1)
             if chan.recv_ready():
                 result += chan.recv(9999999).decode()
     return chan, result
-def get_process_mem(chan, process, mode="bash"):
-    chan.send('pidof '+process+'\n')
-    chan, rst_pid = wait_end(chan, mode)
+
+# def sftp_transfer(ip, username, password, localfile, remotefile):
+#     try:
+#         t = paramiko.Transport(sock=(ip, 22))
+#         t.connect(username = username, password = password)
+#         sftp_t = paramiko.SFTPClient.from_transport(t)
+#     except Exception as e:
+#         raise Exception("\033[0;35;43m%s: sftp_transfer SSH connect failed.\033[0m" % threading.current_thread().name)
+    
+#     print("%s: Starting to copy file to server..." % threading.current_thread().name)
+#     sys.stdout.flush()
+#     try:
+#         sftp_t.put(localfile, remotefile)
+#         print("%s: Transfer file finished!" % threading.current_thread().name)
+#         sys.stdout.flush()
+#         t.close()
+#     except EOFError as e:
+#         try:
+#             print("%s: Try to transfer file again due to EOFError..." % threading.current_thread().name)
+#             sys.stdout.flush()
+#             t.close()
+#             t = paramiko.Transport(sock=(ip, 22))
+#             t.connect(username = username, password = password)
+#             sftp_t = paramiko.SFTPClient.from_transport(t)
+#             sftp_t.put(localfile, remotefile)
+#             print("%s: Transfer version file to act mcp finished!" % threading.current_thread().name)
+#             sys.stdout.flush()
+#             t.close()
+#         except:
+#             t.close()
+#             raise Exception("\033[0;35;43m%s: There is not enough available free space for the file.\033[0m" % threading.current_thread().name)
+#     except PermissionError as e:
+#         try:
+#             print("%s: Try to transfer version file to act mcp again due to PermissionError..." % threading.current_thread().name)
+#             sys.stdout.flush()
+#             t.close()
+#             t = paramiko.Transport(sock=(ip, 22))
+#             t.connect(username = username, password = password)
+#             sftp_t = paramiko.SFTPClient.from_transport(t)
+#             sftp_t.put(localfile, remotefile)
+#             print("%s: Transfer version file to act mcp finished!" % threading.current_thread().name)
+#             sys.stdout.flush()
+#             t.close()
+#         except:
+#             t.close()
+#             raise Exception("\033[0;35;43m%s: Please confirm the source file is not used by another process.\033[0m" % threading.current_thread().name)
+#     except:
+#         print("%s: There is something wrong when transftering the file." % threading.current_thread().name)
+#         sys.stdout.flush()
+#         t.close()
+#         raise Exception("\033[0;35;43m%s: There is something wrong when transftering the file.\033[0m" % threading.current_thread().name)
+
+def get_process_mem(chan, process, mode="shell"):
+    # chan.send('pidof '+process+'\n')
+    # chan, rst_pid = wait_end(chan, mode)
     # print(rst_pid)
-    process_pid = re.findall(r"\n(?:\x00)?(\d+)(?:\x00)?\r",rst_pid)[0]
-    chan.send("cat /proc/" + process_pid + "/status|grep VmRSS\n")
-    chan.send("cat /proc/" + process_pid + "/status|grep VmRSS\n")
+    # process_pid = re.findall(r"\n(?:\x00)?(\d+)(?:\x00)?\r",rst_pid)[0]
+    chan.send("cat /proc/`pidof " + process + "`/status|grep VmRSS\n")
     chan, rst_mem = wait_end(chan, mode)
-    process_mem = str(round(int(re.findall(r"VmRSS:\s*(\d+)",rst_mem)[0])/1024,2))
+    # chan.send("cat /proc/" + process_pid + "/status|grep VmRSS\n")
+    # chan, rst_mem = wait_end(chan, mode)
+    try:
+        process_mem = str(round(int(re.findall(r"VmRSS:\D*(\d+)",rst_mem)[0])/1024,2))
+    except Exception as e:
+        raise Exception("\033[0;35;43m%s: get %s memory failed. The last output: %s\033[0m" % (threading.current_thread().name, process,rst_mem))
     return process_mem
+def get_process_fd(chan, process, mode="shell"):
+    chan.send('ls /proc/`pidof '+process+'`/fd -al|wc -l\n')
+    chan, rst_fd = wait_end(chan, mode)
+    process_fd = re.findall(r"\s(?:\x00)?(\d+)", rst_fd)[0]
+    return str(int(process_fd)-3)
+def get_fs(chan, point, mode="shell"):
+    chan.send("df -h|awk '{print $5,$6}'\n")
+    chan, rst_fs = wait_end(chan, mode)
+    point_fd = re.findall(r"(\d+%) "+point+r"\s", rst_fs)[0]
+    return point_fd
+def get_threads(chan, process, mode="shell"):
+    # chan.send("top -H -n 1 -b -p `pidof "+process+"`|grep Tasks\n")
+    # print("cat /proc/`pidof " + process + "`/status|grep Threads\n")
+    chan.send("cat /proc/`pidof " + process + "`/status|grep Threads\n")
+    chan, rst_thread = wait_end(chan, mode)
+    chan.send("cat /proc/`pidof " + process + "`/status|grep Threads\n")
+    chan, rst_thread = wait_end(chan, mode)
+    # process_threads = re.findall(r"(\d+).*total", rst_thread)[0]
+    try:
+        process_threads = re.findall(r"Threads:\D*(\d+)",rst_thread)[0]
+    except Exception as e:
+        raise Exception("\033[0;35;43m%s: get %s threads failed. The last output: %s\033[0m" % (threading.current_thread().name, process,rst_thread))
+    return process_threads
 def ssh_connect(ip, counter_list, username, password):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -43,7 +127,7 @@ def ssh_connect(ip, counter_list, username, password):
         ssh.connect(ip, 22, username, password)
     except Exception as e:
         try:
-            ssh.connect(ip, 22, username, password)
+            ssh.connect(ip.replace('200','202'), 22, username, password)
         except Exception as e:
             raise e
     print("has login to " + ip)
@@ -53,27 +137,49 @@ def ssh_connect(ip, counter_list, username, password):
     chan.recv(9999).decode()
     chan.send("\nshow chassis status|no-more\n")
     chan, rst_chassis = wait_end(chan)
-    act_mcp = re.findall("([x|m]s[a|b]).*operational.*act", rst_chassis)[0]
-    act_cips = re.findall("(cs[a|b]).*operational.*act", rst_chassis)[0]
+    act_mcp = re.findall("([x|m]s[a|b]).*.*act", rst_chassis)[0]
+    act_cips = re.findall("(cs[a|b]).*.*act", rst_chassis)[0]
     print("%s--->act_mcp: %s" % (threading.current_thread().name, act_mcp))
     sys.stdout.flush()
     print("%s--->act_cips: %s" % (threading.current_thread().name, act_cips))
     sys.stdout.flush()
     chan.send("start shell\n")
     chan, rst_chassis = wait_end(chan, "bash")
+    chan.send("su -\n")
+    chan, rst_chassis = wait_end(chan, "shell")
     chan.send("top -n 1 -b|grep -E 'DSWP.out|rcpd|cfgd|cips_app'|awk '{print $12,$9}'\n")
-    chan, rst_top = wait_end(chan, "bash")
+    chan, rst_top = wait_end(chan, "shell")
     rcpd = re.findall(r"rcpd (\S+)", rst_top)[0]
     cfgd = re.findall(r"cfgd (\S+)", rst_top)[0]
     dswp = str(sum(float(x) for x in re.findall(r"DSWP\.out (\S+)", rst_top)))
     chan.send("echo 3 > /proc/sys/vm/drop_caches\n")
-    chan, rst_echo = wait_end(chan, "bash")
+    chan, rst_echo = wait_end(chan, "shell")
     chan.send("free -m|awk 'NR==3 {print $4}'\n")
-    chan, rst_free = wait_end(chan, "bash")
+    chan, rst_free = wait_end(chan, "shell")
     mem = re.findall(r"(\d+)\r\n", rst_free)[0]
-    dswp_mem = get_process_mem(chan, "DSWP.out")
+    try:
+        dswp_mem = get_process_mem(chan, "DSWP.out")
+    except:
+        dswp_mem = "0"
     rcpd_mem = get_process_mem(chan, "rcpd")
     cfgd_mem = get_process_mem(chan, "cfgd")
+    try:
+        dswp_fd = get_process_fd(chan, "DSWP.out")
+    except:
+        dswp_fd = "0"
+    rcpd_fd = get_process_fd(chan, "rcpd")
+    cfgd_fd = get_process_fd(chan, "cfgd")
+    run = get_fs(chan, "/run")
+    volatile = get_fs(chan, "/var/volatile")
+    sdboot = get_fs(chan, "/sdboot")
+    sddata = get_fs(chan, "/sddata")
+    sdlog = get_fs(chan, "/sdlog")
+    try:
+        dswp_threads = get_threads(chan, "DSWP.out")
+    except:
+        dswp_threads = "0"
+    rcpd_threads = get_threads(chan, "rcpd")
+    cfgd_threads = get_threads(chan, "cfgd")
     if "ms" in act_mcp:
         if act_mcp == "msa":
             if act_cips == "csa":
@@ -98,14 +204,19 @@ def ssh_connect(ip, counter_list, username, password):
                 chan.send("root\n")
                 chan, rst = wait_end(chan, "shell")
         chan.send("top -n 1 -b|awk '{print $9,$8}'|grep cips_app\n")
+        chan.send("top -n 1 -b|grep cips_app|awk '{print $12,$9}'\n")
         chan, rst_cips = wait_end(chan, "shell")
-        cips_app = re.findall(r"cips_app (\S+)", rst_cips)[0]
+        cips_app = re.findall(r"cips_app ([\d\.]+)", rst_cips)[0]
         cips_mem = get_process_mem(chan, "cips_app", "shell")
+        cips_fd = get_process_fd(chan, "cips_app")
+        cips_threads = get_threads(chan, "cips_app")
     # elif act_mcp == "xsa" and act_cips == "csa" or act_mcp == "xsb" and act_cips == "csb":
     #     chan, rst = wait_end(chan, "shell")
     elif act_mcp == "xsa" and act_cips == "csa" or act_mcp == "xsb" and act_cips == "csb":
-        cips_app = re.findall(r"cips_app (\S+)", rst_top)[0]
+        cips_app = re.findall(r"cips_app ([\d\.]+)", rst_top)[0]
         cips_mem = get_process_mem(chan, "cips_app")
+        cips_fd = get_process_fd(chan, "cips_app")
+        cips_threads = get_threads(chan, "cips_app")
     else:
         if act_mcp == "xsa" and act_cips == "csb":
             chan.send("telnet 169.254.1.3\n")
@@ -119,9 +230,11 @@ def ssh_connect(ip, counter_list, username, password):
             chan, rst = wait_end(chan, "shell")
         chan.send("top -n 1 -b|grep cips_app|awk '{print $12,$9}'\n")
         chan, rst_cips = wait_end(chan, "shell")
-        cips_app = re.findall(r"cips_app (\S+)", rst_cips)[0]
+        cips_app = re.findall(r"cips_app ([\d\.]+)", rst_cips)[0]
         cips_mem = get_process_mem(chan, "cips_app", "shell")
-    counter_list.append([ip, cips_app, dswp, rcpd, cfgd, cips_mem, dswp_mem, rcpd_mem, cfgd_mem, mem])
+        cips_fd = get_process_fd(chan, "cips_app")
+        cips_threads = get_threads(chan, "cips_app")
+    counter_list.append([ip, cips_app, dswp, rcpd, cfgd, cips_mem, dswp_mem, rcpd_mem, cfgd_mem, mem, cips_fd, dswp_fd, rcpd_fd, cfgd_fd, run, volatile, sdboot, sddata, sdlog, cips_threads, dswp_threads, rcpd_threads, cfgd_threads])
 
 def func_thread(ip_list, counter_list, username, password):
     print("Thread %s is running..." % threading.current_thread().name)
@@ -140,44 +253,74 @@ def func_thread(ip_list, counter_list, username, password):
 
 def write_file(dirs, time_now, counter):
     file = os.path.join(dirs, counter[0])
+    ne_ip = counter[0]
     counter[0] = time_now
-    print("write_file: " + file)
-    sys.stdout.flush()
+    # print("write_file: " + file)
+    # sys.stdout.flush()
     with open(file+".csv", "a+", newline="") as f:
         fw = csv.writer(f, delimiter=",", lineterminator="\n")
         fw.writerow(counter)
     gen_echart(file)
+    # sftp_transfer("200.200.1.199", "root", "eci_root", file+".html", "/var/www/html/" + ne_ip + ".html")
 
 def gen_echart(file):
     line_cpu = Line("NE Process CPU Utility", "(%)", page_title="ne_cpu_mem")
-    line_mem = Line("NE Memory Utility", "(MB)", title_top="48%")
-    date = []
-    cpus = ["cips_app","DSWP.out","rcpd","cfgd"]
-    mems = ["cips_app","DSWP.out","rcpd","cfgd","mcp_free"]
-    # for cpu, mem in zip(cpus, mems):
-    #     locals()[cpu] = []
-    #     locals()[mem] = []
-    for cpu in cpus:
-        locals()[cpu+"_cpu"] = []
-    for mem in mems:
-        locals()[mem+"_mem"] = []
-    with open(file+".csv", "r", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            date.append(row[0])
-            for index, val in enumerate(cpus):
-                locals()[val+"_cpu"].append(row[index+1])
-            for index, val in enumerate(mems):
-                locals()[val+"_mem"].append(row[index+5])
-    for item in cpus:
-        line_cpu.add(item, date, locals()[item+"_cpu"], is_smooth=True, legend_pos="25%")
-    for item in mems:
-        line_mem.add(item, date, locals()[item+"_mem"], is_smooth=True, legend_pos="25%", legend_top="49%")
-    # line_mem.add(ne, date, memory, is_smooth=True, legend_pos="25%", legend_top="49%")
-    grid = Grid(height=700, width=1000)
-    grid.add(line_cpu, grid_bottom="55%")
-    grid.add(line_mem, grid_top="55%")
+    line_mem = Line("NE Memory Utility", "(MB)", title_top="20%")
+    line_fd = Line("NE FD Utility", "(%)", title_top="40%")
+    line_fs = Line("NE FS Utility", "(%)", title_top="60%")
+    line_thread = Line("NE Threads Utility", "(counter)", title_top="80%")
+    # df=pd.read_csv(source_filename,header=None, names=range(23))
+    df=pd.read_csv(file+".csv",header=None, names=['date', 'cips_app_cpu', 'DSWP.out_cpu', 'rcpd_cpu', 'cfgd_cpu', 'cips_app_mem', 'DSWP.out_mem', 'rcpd_mem', 'cfgd_mem', 'free_mem', 
+        'cips_app_fd', 'DSWP.out_fd', 'rcpd_fd', 'cfgd_fd', '/run', '/var/volatile', '/sdboot', '/sddata', '/sdlog', 'cips_app_threads', 'DSWP.out_threads', 'rcpd_threads', 'cfgd_threads'])
+    date = df['date']
+    for item in df.columns[1:5]:
+        line_cpu.add(item, date, df[item], is_smooth=True, legend_pos="20%")
+    for item in df.columns[5:10]:
+        line_mem.add(item, date, df[item], is_smooth=True, legend_pos="20%", legend_top="20%")
+    for item in df.columns[10:14]:
+        line_fd.add(item, date[df[item].notnull()], df[item][df[item].notnull()], is_smooth=True, legend_pos="20%", legend_top="40%")
+    for item in df.columns[14:19]:
+        line_fs.add(item, date[df[item].notnull()], df[item].str.replace('%','')[df[item].str.replace('%','').notnull()], is_smooth=True, legend_pos="20%", legend_top="60%")
+    for item in df.columns[19:]:
+        line_thread.add(item, date[df[item].notnull()], df[item][df[item].notnull()], is_smooth=True, legend_pos="20%", legend_top="80%")
+    grid = Grid(height=2500, width=1200)
+    grid.add(line_cpu, grid_top="1.5%", grid_bottom="81.5%")
+    grid.add(line_mem, grid_top="21.5%", grid_bottom="61.5%")
+    grid.add(line_fd, grid_top="41.5%", grid_bottom="41.5%")
+    grid.add(line_fs, grid_top="61.5%", grid_bottom="21.5%")
+    grid.add(line_thread, grid_top="81.5%", grid_bottom="1.5%")
     grid.render(file + ".html")
+
+# def gen_echart(file):
+#     line_cpu = Line("NE Process CPU Utility", "(%)", page_title="ne_cpu_mem")
+#     line_mem = Line("NE Memory Utility", "(MB)", title_top="48%")
+#     date = []
+#     cpus = ["cips_app","DSWP.out","rcpd","cfgd"]
+#     mems = ["cips_app","DSWP.out","rcpd","cfgd","mcp_free"]
+#     # for cpu, mem in zip(cpus, mems):
+#     #     locals()[cpu] = []
+#     #     locals()[mem] = []
+#     for cpu in cpus:
+#         locals()[cpu+"_cpu"] = []
+#     for mem in mems:
+#         locals()[mem+"_mem"] = []
+#     with open(file+".csv", "r", newline="") as f:
+#         reader = csv.reader(f)
+#         for row in reader:
+#             date.append(row[0])
+#             for index, val in enumerate(cpus):
+#                 locals()[val+"_cpu"].append(row[index+1])
+#             for index, val in enumerate(mems):
+#                 locals()[val+"_mem"].append(row[index+5])
+#     for item in cpus:
+#         line_cpu.add(item, date, locals()[item+"_cpu"], is_smooth=True, legend_pos="25%")
+#     for item in mems:
+#         line_mem.add(item, date, locals()[item+"_mem"], is_smooth=True, legend_pos="25%", legend_top="49%")
+#     # line_mem.add(ne, date, memory, is_smooth=True, legend_pos="25%", legend_top="49%")
+#     grid = Grid(height=700, width=1000)
+#     grid.add(line_cpu, grid_bottom="55%")
+#     grid.add(line_mem, grid_top="55%")
+#     grid.render(file + ".html")
 
 if __name__ == '__main__':
     ip_list = sys.argv[1].replace(" ", "").split(",")
@@ -190,14 +333,59 @@ if __name__ == '__main__':
         for y in counter_list:
             if y[0]==x:
                 counter_list_sorted.append(y)
-    print(f"+{'-'*15}+{'-'*80}+")
-    print(f"|{'NE IP'.center(15)}|{'cips_app'.center(8)}|{'DSWP.out'.center(8)}|{'rcpd'.center(4)}|{'cfgd'.center(4)}|{'cips_app(MB)'.center(12)}|{'DSWP.out(MB)'.center(12)}|{'rcpd(MB)'.center(8)}|{'cfgd(MB)'.center(8)}|{'free(MB)'.center(8)}|")
-    print(f"+{'-'*15}+{'-'*80}+")
+    print("NE CPU Utility:")
+    print(f"+{'-'*15}+{'-'*43}+")
+    print(f"|{'NE IP'.center(15)}|{'cips_app'.center(10)}|{'DSWP.out'.center(10)}|{'rcpd'.center(10)}|{'cfgd'.center(10)}|")
+    print(f"+{'-'*15}+{'-'*43}+")
     sys.stdout.flush()
     for counter in counter_list_sorted:
-        print("|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|" % (counter[0].center(15), counter[1].center(8), counter[2].center(8), counter[3].center(4), counter[4].center(4), counter[5].center(12), counter[6].center(12), counter[7].center(8), counter[8].center(8), counter[9].center(8)))
+        print("|%s|%s|%s|%s|%s|" % (counter[0].center(15), counter[1].center(10), counter[2].center(10), counter[3].center(10), counter[4].center(10)))
         sys.stdout.flush()
-    print(f"+{'-'*15}+{'-'*80}+")
+    print(f"+{'-'*15}+{'-'*43}+")
+    sys.stdout.flush()
+
+    print("NE Memory Utility:(MB)")
+    print(f"+{'-'*15}+{'-'*54}+")
+    print(f"|{'NE IP'.center(15)}|{'cips_app'.center(10)}|{'DSWP.out'.center(10)}|{'rcpd'.center(10)}|{'cfgd'.center(10)}|{'free'.center(10)}|")
+    print(f"+{'-'*15}+{'-'*54}+")
+    sys.stdout.flush()
+    for counter in counter_list_sorted:
+        print("|%s|%s|%s|%s|%s|%s|" % (counter[0].center(15), counter[5].center(10), counter[6].center(10), counter[7].center(10), counter[8].center(10), counter[9].center(10)))
+        sys.stdout.flush()
+    print(f"+{'-'*15}+{'-'*54}+")
+    sys.stdout.flush()
+    
+    print("NE FD Count:")
+    print(f"+{'-'*15}+{'-'*43}+")
+    print(f"|{'NE IP'.center(15)}|{'cips_app'.center(10)}|{'DSWP.out'.center(10)}|{'rcpd'.center(10)}|{'cfgd'.center(10)}|")
+    print(f"+{'-'*15}+{'-'*43}+")
+    sys.stdout.flush()
+    for counter in counter_list_sorted:
+        print("|%s|%s|%s|%s|%s|" % (counter[0].center(15), counter[10].center(10), counter[11].center(10), counter[12].center(10), counter[13].center(10)))
+        sys.stdout.flush()
+    print(f"+{'-'*15}+{'-'*43}+")
+
+    print("NE FS Utility:")
+    print(f"+{'-'*15}+{'-'*59}+")
+    print(f"|{'NE IP'.center(15)}|{'/run'.center(10)}|{'/var/volatile'.center(15)}|{'sdboot'.center(10)}|{'sddata'.center(10)}|{'sdlog'.center(10)}|")
+    print(f"+{'-'*15}+{'-'*59}+")
+    sys.stdout.flush()
+    for counter in counter_list_sorted:
+        print("|%s|%s|%s|%s|%s|%s|" % (counter[0].center(15), counter[14].center(10), counter[15].center(15), counter[16].center(10), counter[17].center(10), counter[18].center(10)))
+        sys.stdout.flush()
+    print(f"+{'-'*15}+{'-'*59}+")
+    sys.stdout.flush()
+
+    print("NE Threads Number:")
+    print(f"+{'-'*15}+{'-'*43}+")
+    print(f"|{'NE IP'.center(15)}|{'cips_app'.center(10)}|{'DSWP.out'.center(10)}|{'rcpd'.center(10)}|{'cfgd'.center(10)}|")
+    print(f"+{'-'*15}+{'-'*43}+")
+    sys.stdout.flush()
+    for counter in counter_list_sorted:
+        print("|%s|%s|%s|%s|%s|" % (counter[0].center(15), counter[19].center(10), counter[20].center(10), counter[21].center(10), counter[22].center(10)))
+        sys.stdout.flush()
+    print(f"+{'-'*15}+{'-'*43}+")
+    sys.stdout.flush()
     # if sys.argv[1] == "200.200.150.82,200.200.130.82,200.200.121.62,200.200.121.65,200.200.180.20,200.200.180.60,200.200.180.61,200.200.121.61,200.200.180.71,200.200.122.51":
     dirs = r"E:\Study\Python\get_cpu_mem\result"
     time_now = time.strftime("%Y-%m-%d_%H%M%S", time.localtime(time.time()))
